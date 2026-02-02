@@ -781,13 +781,45 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 		"~": "__TOPIC__"}`,
 		"%s/light/%s_headlights/config": `{
 		"name": "__NAME__ Head Lights",
-		"icon": "mdi:car-light-high",
+		"icon": "mdi:car-light-dimmed",
 		"state_topic": "~/lights/head",
 		"command_topic": "~/set/headlights",
 		"payload_off": "off",
 		"payload_on": "on",
 		"avty_t": "~/available",
 		"unique_id": "__VIN___headlights",
+		"dev": {
+			"name": "PHEV __VIN__",
+			"identifiers": ["phev-__VIN__"],
+			"manufacturer": "Mitsubishi",
+			"model": "Outlander PHEV"
+		},
+		"~": "__TOPIC__"}`,
+		"%s/binary_sensor/%s_interiorlights/config": `{
+		"device_class": "light",
+		"name": "__NAME__ Interior Lights",
+		"icon": "mdi:lightbulb",
+		"state_topic": "~/lights/interior",
+		"payload_off": "off",
+		"payload_on": "on",
+		"avty_t": "~/available",
+		"unique_id": "__VIN___interiorlights",
+		"dev": {
+			"name": "PHEV __VIN__",
+			"identifiers": ["phev-__VIN__"],
+			"manufacturer": "Mitsubishi",
+			"model": "Outlander PHEV"
+		},
+		"~": "__TOPIC__"}`,
+		"%s/binary_sensor/%s_hazardlights/config": `{
+		"device_class": "light",
+		"name": "__NAME__ Hazard Lights",
+		"icon": "mdi:hazard-lights",
+		"state_topic": "~/lights/hazard",
+		"payload_off": "off",
+		"payload_on": "on",
+		"avty_t": "~/available",
+		"unique_id": "__VIN___hazardlights",
 		"dev": {
 			"name": "PHEV __VIN__",
 			"identifiers": ["phev-__VIN__"],
