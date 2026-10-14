@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/buxtronix/phev2mqtt/protocol"
 	log "github.com/sirupsen/logrus"
@@ -16,6 +15,12 @@ import (
 // customisable functions from register 0x16, decoded by
 // protocol.VehicleSettings. "off" (default) publishes nothing and removes the
 // entities; "read" shows every setting the car offers as a read-only sensor.
+//
+// The car sends its settings a few at a time, carrying on through the list
+// over many minutes rather than all at session start. So in read mode an
+// entity, once announced, is never removed, and its value is retained on the
+// broker: Home Assistant keeps every setting across restarts of either side
+// while the car works through its list again.
 
 const (
 	vehicleSettingsOff  = "off"
@@ -70,32 +75,50 @@ func vehicleSettingsKeys() []string {
 	return keys
 }
 
+// vehicleSettingStateTopics are the state topics of a setting's entity,
+// relative to the topic prefix.
+func vehicleSettingStateTopics(id int) (value, attributes string) {
+	return fmt.Sprintf("/vehicle_setting/%d", id), fmt.Sprintf("/vehicle_setting/%d/attributes", id)
+}
+
+const vehicleSettingsStatusTopic = "/vehicle_settings/status"
+
 // publishVehicleSettingsDiscovery announces a sensor for every setting the
-// car has reported so far and removes the others, or all of them when the
-// feature is off. Settings reported later are announced as they arrive.
+// car has reported so far; settings reported later are announced as they
+// arrive. Entities announced before stay. When the feature is off, every
+// vehicle settings entity and its retained values are removed.
 func (m *mqttClient) publishVehicleSettingsDiscovery(vin, topic, name string) {
 	m.vs.mu.Lock()
 	defer m.vs.mu.Unlock()
 	m.vs.target = &discoveryTarget{vin, topic, name}
 	m.vs.announced = map[int]bool{}
-	on := m.vs.mode == vehicleSettingsRead
-	m.announce(vehicleSettingsStatusEntity, vin, topic, name, on)
+	if m.vs.mode == vehicleSettingsOff {
+		m.announce(vehicleSettingsStatusEntity, vin, topic, name, false)
+		m.client.Publish(m.topic(vehicleSettingsStatusTopic), 0, true, "")
+		for _, id := range protocol.SettingIDs() {
+			m.announce(vehicleSettingEntity(id), vin, topic, name, false)
+			value, attributes := vehicleSettingStateTopics(id)
+			m.client.Publish(m.topic(value), 0, true, "")
+			m.client.Publish(m.topic(attributes), 0, true, "")
+		}
+		return
+	}
+	m.announce(vehicleSettingsStatusEntity, vin, topic, name, true)
 	for _, id := range protocol.SettingIDs() {
-		s, ok := m.vs.settings.Get(id)
-		show := on && ok && protocol.SettingAvailable(id, s)
-		m.announce(vehicleSettingEntity(id), vin, topic, name, show)
-		m.vs.announced[id] = show
+		if s, ok := m.vs.settings.Get(id); ok && protocol.SettingAvailable(id, s) {
+			m.announce(vehicleSettingEntity(id), vin, topic, name, true)
+			m.vs.announced[id] = true
+		}
 	}
 }
 
 // publishVehicleSettings folds a settings notification in and publishes what
-// changed, announcing settings Home Assistant doesn't know yet.
+// changed, retained, announcing settings Home Assistant doesn't know yet.
 func (m *mqttClient) publishVehicleSettings(register byte, data []byte) {
 	if register != protocol.SettingsRegister || m.vs.mode == vehicleSettingsOff {
 		return
 	}
 	values := map[string]string{}
-	newEntities := false
 
 	m.vs.mu.Lock()
 	for _, id := range m.vs.settings.Update(data) {
@@ -106,7 +129,6 @@ func (m *mqttClient) publishVehicleSettings(register byte, data []byte) {
 		if t := m.vs.target; t != nil && !m.vs.announced[id] {
 			m.announce(vehicleSettingEntity(id), t.vin, t.topic, t.name, true)
 			m.vs.announced[id] = true
-			newEntities = true
 		}
 		var labels []string
 		for _, o := range protocol.SettingOptions(id, s) {
@@ -114,24 +136,22 @@ func (m *mqttClient) publishVehicleSettings(register byte, data []byte) {
 		}
 		d, _ := protocol.SettingDefinition(id)
 		attrs, _ := json.Marshal(map[string]interface{}{"group": d.Group, "setting_id": id, "options": labels})
-		values[fmt.Sprintf("/vehicle_setting/%d", id)] = protocol.SettingOptionLabel(id, s.Value, &s)
-		values[fmt.Sprintf("/vehicle_setting/%d/attributes", id)] = string(attrs)
+		value, attributes := vehicleSettingStateTopics(id)
+		values[value] = protocol.SettingOptionLabel(id, s.Value, &s)
+		values[attributes] = string(attrs)
 	}
 	if m.vs.settings.Known() {
 		status := "allowed"
 		if !protocol.SettingsStatusAllowsChanges(m.vs.settings.Status) {
 			status = "refused"
 		}
-		values["/vehicle_settings/status"] = status
+		values[vehicleSettingsStatusTopic] = status
 	}
 	m.vs.mu.Unlock()
 
+	// Retained: a setting may not come round again for many minutes.
 	for t, p := range values {
-		m.publish(t, p)
-	}
-	if newEntities {
-		// Home Assistant subscribes to the new entities' topics only now.
-		time.AfterFunc(stateResendDelay, m.republishState)
+		m.client.Publish(m.topic(t), 0, true, p)
 	}
 }
 

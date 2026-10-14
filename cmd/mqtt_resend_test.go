@@ -15,13 +15,22 @@ type fakeMQTT struct {
 	mqtt.Client
 	mu  sync.Mutex
 	pub map[string]string
+	ret map[string]bool
 }
 
 func (f *fakeMQTT) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pub[topic] = fmt.Sprint(payload)
+	f.ret[topic] = retained
 	return &mqtt.DummyToken{}
+}
+
+// retained reports whether the last message on topic was retained.
+func (f *fakeMQTT) retained(topic string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ret[topic]
 }
 
 func (f *fakeMQTT) reset() map[string]string {
@@ -33,7 +42,7 @@ func (f *fakeMQTT) reset() map[string]string {
 }
 
 func newTestClient() (*mqttClient, *fakeMQTT) {
-	f := &fakeMQTT{pub: map[string]string{}}
+	f := &fakeMQTT{pub: map[string]string{}, ret: map[string]bool{}}
 	return &mqttClient{client: f, prefix: "phev", mqttData: map[string]string{}, haDiscovery: true, haDiscoveryPrefix: "homeassistant"}, f
 }
 

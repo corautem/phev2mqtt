@@ -43,15 +43,24 @@ func TestVehicleSettingsRead(t *testing.T) {
 	if _, ok := got[settingConfigTopic(7)]; ok {
 		t.Error("announced before discovery")
 	}
+	for _, topic := range []string{"phev/vehicle_setting/7", "phev/vehicle_setting/7/attributes", "phev/vehicle_settings/status"} {
+		if !f.retained(topic) {
+			t.Errorf("%s not retained", topic)
+		}
+	}
 
-	// Discovery announces the reported settings and removes the rest.
+	// Discovery announces the reported settings and leaves the others alone:
+	// the car may not have come round to them yet in this session.
 	m.publishVehicleSettingsDiscovery(testVIN, "phev", "Phev")
 	got = f.reset()
 	if !strings.Contains(got[settingConfigTopic(7)], "Lights: Charging Lid Light Auto cut-out") {
 		t.Errorf("id 7 config = %q", got[settingConfigTopic(7)])
 	}
-	if got[settingConfigTopic(11)] == "" || got[settingConfigTopic(13)] != "" {
-		t.Errorf("id 11 config %q, id 13 config %q", got[settingConfigTopic(11)], got[settingConfigTopic(13)])
+	if got[settingConfigTopic(11)] == "" {
+		t.Error("id 11 not announced")
+	}
+	if _, touched := got[settingConfigTopic(13)]; touched {
+		t.Error("id 13, not reported yet, was announced or removed")
 	}
 	if got["homeassistant/sensor/"+testVIN+"_"+vehicleSettingsStatusKey+"/config"] == "" {
 		t.Error("status entity not announced")
@@ -89,8 +98,10 @@ func TestVehicleSettingsOff(t *testing.T) {
 	}
 	m.publishVehicleSettingsDiscovery(testVIN, "phev", "Phev")
 	got := f.reset()
-	if payload, ok := got[settingConfigTopic(7)]; !ok || payload != "" {
-		t.Errorf("off mode: id 7 config %q (present %v), want an empty config", payload, ok)
+	for _, topic := range []string{settingConfigTopic(7), "phev/vehicle_setting/7", "phev/vehicle_setting/7/attributes", "phev/vehicle_settings/status"} {
+		if payload, ok := got[topic]; !ok || payload != "" || !f.retained(topic) {
+			t.Errorf("off mode: %s = %q (present %v), want an empty retained message", topic, payload, ok)
+		}
 	}
 	for topic, payload := range got {
 		if payload != "" {

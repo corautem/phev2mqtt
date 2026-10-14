@@ -15,8 +15,9 @@ var mqttCleanupCmd = &cobra.Command{
 	Use:   "mqtt-cleanup",
 	Short: "Remove the Home Assistant entities added by optional features.",
 	Long: `Removes every Home Assistant discovery entity that the optional features
-(--extra_sensors and later ones) may have created, whatever flags the running
-gateway uses. The entities phev2mqtt has always published are left alone.
+(--extra_sensors, --vehicle_settings and later ones) may have created, and the
+values they keep retained on the broker, whatever flags the running gateway
+uses. The entities phev2mqtt has always published are left alone.
 
 Run it before rolling back to an older phev2mqtt build, so Home Assistant is
 not left with entities that nothing updates any more.
@@ -69,6 +70,7 @@ func runMqttCleanup(cmd *cobra.Command, args []string) error {
 	username, _ := cmd.Flags().GetString("mqtt_username")
 	password, _ := cmd.Flags().GetString("mqtt_password")
 	prefix, _ := cmd.Flags().GetString("ha_discovery_prefix")
+	topicPrefix, _ := cmd.Flags().GetString("mqtt_topic_prefix")
 	wait, _ := cmd.Flags().GetDuration("wait")
 
 	// A client id of its own, so the running gateway is not disconnected.
@@ -84,31 +86,53 @@ func runMqttCleanup(cmd *cobra.Command, args []string) error {
 	defer c.Disconnect(250)
 
 	var mu sync.Mutex
-	targets := map[string]bool{}
-	collect := func(_ mqtt.Client, msg mqtt.Message) {
+	configs, values := map[string]bool{}, map[string]bool{}
+	collectConfig := func(_ mqtt.Client, msg mqtt.Message) {
 		if msg.Retained() && cleanupTarget(msg.Topic(), msg.Payload()) {
 			mu.Lock()
-			targets[msg.Topic()] = true
+			configs[msg.Topic()] = true
 			mu.Unlock()
 		}
 	}
-	if token := c.Subscribe(prefix+"/+/+/config", 0, collect); token.Wait() && token.Error() != nil {
-		return token.Error()
+	// Vehicle settings keep their values retained.
+	collectValue := func(_ mqtt.Client, msg mqtt.Message) {
+		if msg.Retained() && len(msg.Payload()) > 0 {
+			mu.Lock()
+			values[msg.Topic()] = true
+			mu.Unlock()
+		}
+	}
+	filters := map[string]mqtt.MessageHandler{
+		prefix + "/+/+/config":              collectConfig,
+		topicPrefix + "/vehicle_setting/#":  collectValue,
+		topicPrefix + "/vehicle_settings/#": collectValue,
+	}
+	for filter, handler := range filters {
+		if token := c.Subscribe(filter, 0, handler); token.Wait() && token.Error() != nil {
+			return token.Error()
+		}
 	}
 	// Retained messages arrive right after subscribing.
 	time.Sleep(wait)
-	c.Unsubscribe(prefix + "/+/+/config").Wait()
+	for filter := range filters {
+		c.Unsubscribe(filter).Wait()
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	for topic := range targets {
-		if token := c.Publish(topic, 1, true, ""); token.Wait() && token.Error() != nil {
-			log.Errorf("Removing %s: %v", topic, token.Error())
-			continue
+	remove := func(topics map[string]bool) int {
+		n := 0
+		for topic := range topics {
+			if token := c.Publish(topic, 1, true, ""); token.Wait() && token.Error() != nil {
+				log.Errorf("Removing %s: %v", topic, token.Error())
+				continue
+			}
+			log.Infof("Removed %s", topic)
+			n++
 		}
-		log.Infof("Removed %s", topic)
+		return n
 	}
-	log.Infof("Removed %d optional Home Assistant entities", len(targets))
+	log.Infof("Removed %d optional Home Assistant entities and %d retained values", remove(configs), remove(values))
 	return nil
 }
 
@@ -118,5 +142,6 @@ func init() {
 	mqttCleanupCmd.Flags().String("mqtt_username", "", "Username to login to MQTT server")
 	mqttCleanupCmd.Flags().String("mqtt_password", "", "Password to login to MQTT server")
 	mqttCleanupCmd.Flags().String("ha_discovery_prefix", "homeassistant", "Prefix for Home Assistant MQTT discovery")
+	mqttCleanupCmd.Flags().String("mqtt_topic_prefix", "phev", "Prefix for MQTT topics")
 	mqttCleanupCmd.Flags().Duration("wait", 3*time.Second, "How long to collect retained discovery configs")
 }
