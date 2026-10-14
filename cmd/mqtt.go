@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/viper"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -135,6 +136,9 @@ type mqttClient struct {
 	client         mqtt.Client
 	options        *mqtt.ClientOptions
 	mqttData       map[string]string
+	// mqttDataMu guards mqttData, written by the car loop and read by
+	// republishState.
+	mqttDataMu     sync.Mutex
 	updateInterval time.Duration
 
 	phev         *client.Client
@@ -257,10 +261,33 @@ func (m *mqttClient) republishDiscovery() {
 	m.publishHomeAssistantDiscovery(m.lastVIN, m.prefix, "Phev")
 }
 
+// stateResendDelay gives Home Assistant time to subscribe to the state topics
+// of the entities it has just been told about.
+var stateResendDelay = 5 * time.Second
+
+// republishState sends the last value of every state topic again. The car
+// sends most registers only when a session starts or a value changes, so
+// without this Home Assistant shows "unknown" after it restarts, or right
+// after it first creates the entities, until the next phev2mqtt restart.
+func (m *mqttClient) republishState() {
+	m.mqttDataMu.Lock()
+	data := make(map[string]string, len(m.mqttData))
+	for t, p := range m.mqttData {
+		data[t] = p
+	}
+	m.mqttDataMu.Unlock()
+	for t, p := range data {
+		m.client.Publish(m.topic(t), 0, false, p)
+	}
+	log.Debugf("Re-sent %d state values", len(data))
+}
+
 func (m *mqttClient) publish(topic, payload string) {
 //	if cache := m.mqttData[topic]; cache != payload {
 		m.client.Publish(m.topic(topic), 0, false, payload)
+		m.mqttDataMu.Lock()
 		m.mqttData[topic] = payload
+		m.mqttDataMu.Unlock()
 //	}
 }
 
@@ -906,6 +933,7 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 		//m.client.Publish(topic, 0, false, "{}")
 	}
 	m.publishOptionalDiscovery(vin, topic, name)
+	time.AfterFunc(stateResendDelay, m.republishState)
 }
 
 func init() {
