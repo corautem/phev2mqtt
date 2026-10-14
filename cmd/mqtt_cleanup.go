@@ -34,6 +34,9 @@ func optionalObjectIDs(vin string) map[string]bool {
 			ids[vin+"_"+e.key] = true
 		}
 	}
+	for _, key := range vehicleSettingsKeys() {
+		ids[vin+"_"+key] = true
+	}
 	return ids
 }
 

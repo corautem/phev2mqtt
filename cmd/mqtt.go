@@ -158,6 +158,7 @@ type mqttClient struct {
 
 	extraSensors bool
 	status       protocol.StatusTracker
+	vs           vehicleSettingsState
 }
 
 func (m *mqttClient) topic(topic string) string {
@@ -178,6 +179,7 @@ func (m *mqttClient) Run(cmd *cobra.Command, args []string) error {
 	wifiRestartTime		:= viper.GetDuration("wifi_restart_time")
 	restartCommand		:= viper.GetString("wifi_restart_command")
 	m.extraSensors		 = viper.GetBool("extra_sensors")
+	m.vs.mode		 = vehicleSettingsMode()
 
 	if restartCommand == "" {
 		log.Infof("WiFi restart disabled")
@@ -583,6 +585,7 @@ func (m *mqttClient) publishRegister(msg *protocol.PhevMessage) {
 		}
 	}
 	m.publishExtraStatus(msg.Register, msg.Data)
+	m.publishVehicleSettings(msg.Register, msg.Data)
 }
 
 // Publish home assistant discovery message.

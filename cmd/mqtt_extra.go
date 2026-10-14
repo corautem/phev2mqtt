@@ -117,14 +117,21 @@ func (m *mqttClient) publishOptionalDiscovery(vin, topic, name string) {
 	for _, f := range optionalFeatures {
 		enabled := viper.GetBool(f.flag)
 		for _, e := range f.entities {
-			payload := ""
-			if enabled {
-				payload = e.config(vin, topic, name)
-			}
-			if token := m.client.Publish(e.discoveryTopic(m.haDiscoveryPrefix, vin), 1, true, payload); token.Wait() && token.Error() != nil {
-				log.Error(token.Error())
-			}
+			m.announce(e, vin, topic, name, enabled)
 		}
+	}
+	m.publishVehicleSettingsDiscovery(vin, topic, name)
+}
+
+// announce publishes an entity's discovery config, or an empty one to remove
+// the entity from Home Assistant.
+func (m *mqttClient) announce(e haEntity, vin, topic, name string, enabled bool) {
+	payload := ""
+	if enabled {
+		payload = e.config(vin, topic, name)
+	}
+	if token := m.client.Publish(e.discoveryTopic(m.haDiscoveryPrefix, vin), 1, true, payload); token.Wait() && token.Error() != nil {
+		log.Error(token.Error())
 	}
 }
 
