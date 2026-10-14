@@ -151,6 +151,9 @@ type mqttClient struct {
 
 	climate *climate
 	enabled bool
+
+	extraSensors bool
+	status       protocol.StatusTracker
 }
 
 func (m *mqttClient) topic(topic string) string {
@@ -170,6 +173,7 @@ func (m *mqttClient) Run(cmd *cobra.Command, args []string) error {
 	m.updateInterval	 = viper.GetDuration("update_interval")
 	wifiRestartTime		:= viper.GetDuration("wifi_restart_time")
 	restartCommand		:= viper.GetString("wifi_restart_command")
+	m.extraSensors		 = viper.GetBool("extra_sensors")
 
 	if restartCommand == "" {
 		log.Infof("WiFi restart disabled")
@@ -424,6 +428,8 @@ func (m *mqttClient) handlePhev(cmd *cobra.Command) error {
 	}
 	m.carConnected = true
 	m.client.Publish(m.topic("/available"), 0, true, "online")
+	m.status.Reset()
+	m.status.MY14 = m.phev.ModelYear == client.ModelYear14
 
 	m.lastError = nil
 
@@ -549,6 +555,7 @@ func (m *mqttClient) publishRegister(msg *protocol.PhevMessage) {
 			m.publish("/charge/plug", "unplugged")
 		}
 	}
+	m.publishExtraStatus(msg.Register, msg.Data)
 }
 
 // Publish home assistant discovery message.
@@ -898,6 +905,7 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 		}
 		//m.client.Publish(topic, 0, false, "{}")
 	}
+	m.publishOptionalDiscovery(vin, topic, name)
 }
 
 func init() {
