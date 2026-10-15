@@ -136,11 +136,14 @@ func powerSwitch(b byte) string {
 	return "unknown"
 }
 
+// alarmState decodes register 0x23[1]. A 2014 car reports 1 right after
+// locking and 2 a few seconds later, once armed; phev-remote-plus saw 6 and
+// 7 armed too.
 func alarmState(b byte) string {
 	switch b {
 	case 0:
 		return "disarmed"
-	case 1, 6, 7:
+	case 1, 2, 6, 7:
 		return "armed"
 	case 4, 5:
 		return "triggered"

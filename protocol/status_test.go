@@ -56,6 +56,9 @@ func TestStatusTrackerSingleRegisters(t *testing.T) {
 		{"power unknown", false, 0x1a, "07", map[string]string{"/power/switch": "unknown"}},
 		{"alarm disarmed", false, 0x23, "0000000202", map[string]string{"/alarm/state": "disarmed"}},
 		{"alarm armed", false, 0x23, "0006000202", map[string]string{"/alarm/state": "armed"}},
+		// Field capture (2014 car): 01 right after locking, then 02.
+		{"alarm arming", false, 0x23, "0001000202", map[string]string{"/alarm/state": "armed"}},
+		{"alarm armed after delay", false, 0x23, "0002000202", map[string]string{"/alarm/state": "armed"}},
 		{"alarm triggered", false, 0x23, "0005000202", map[string]string{"/alarm/state": "triggered"}},
 		{"alarm event", false, 0x14, "1a0a0e12341e01", map[string]string{"/alarm/last_event": localRFC3339(2026, 10, 14, 18, 52, 30)}},
 		{"alarm event unset", false, 0x14, "ffffffffffff00", map[string]string{}},
