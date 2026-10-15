@@ -147,10 +147,12 @@ var vehicleSettingsStatusEntity = sensorEntity(vehicleSettingsStatusKey, "Car Ac
 var vehicleSettingsLastChangeEntity = sensorEntity(vehicleSettingsLastChangeKey, "Vehicle Settings Last Change", "~"+vehicleSettingsLastChangeTopic, map[string]interface{}{
 	"icon": "mdi:history", "entity_category": "diagnostic"})
 
-// vehicleSettingsAllowEntity is the lock on changes in write mode.
+// vehicleSettingsAllowEntity is the lock on changes in write mode. It has no
+// entity category, so it sits with the controls rather than among the many
+// settings in the Configuration section.
 var vehicleSettingsAllowEntity = haEntity{component: "switch", key: vehicleSettingsAllowKey, name: "Vehicle Settings: Allow Changes", fields: map[string]interface{}{
 	"state_topic": "~" + vehicleSettingsAllowTopic, "command_topic": "~" + vehicleSettingsAllowCommand,
-	"payload_on": "ON", "payload_off": "OFF", "icon": "mdi:lock-open-variant", "entity_category": "config"}}
+	"payload_on": "ON", "payload_off": "OFF", "icon": "mdi:lock-open-variant"}}
 
 // vehicleSettingsKeys are the keys of every entity vehicle settings can add.
 func vehicleSettingsKeys() []string {

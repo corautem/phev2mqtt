@@ -553,3 +553,14 @@ func TestVehicleSettingsAllowChangesOnlyInWriteMode(t *testing.T) {
 		t.Error("read mode unlocked changes")
 	}
 }
+
+// The lock sits with the controls, where it can't be missed.
+func TestVehicleSettingsAllowSwitchIsAControl(t *testing.T) {
+	var c map[string]interface{}
+	if err := json.Unmarshal([]byte(vehicleSettingsAllowEntity.config(testVIN, "phev", "Phev")), &c); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c["entity_category"]; ok {
+		t.Errorf("Allow Changes switch has entity_category %v, want none (Controls section)", c["entity_category"])
+	}
+}
