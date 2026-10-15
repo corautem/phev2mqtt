@@ -32,7 +32,8 @@ import (
 // <prefix>/vehicle_settings/known, which seeds the next run.
 //
 // Before the first change of a run, every known setting is saved to a
-// snapshot file in --state_dir; "client restore-settings" puts them back.
+// snapshot file in --state_dir, and a setting the car reports only later is
+// added before its first change; "client restore-settings" puts them back.
 
 const (
 	vehicleSettingsOff   = "off"
@@ -64,8 +65,14 @@ type vehicleSettingsState struct {
 	target   *discoveryTarget
 	// announced holds the mask each announced entity was built with.
 	announced map[int]int
-	// snapshot is the file saved before the first change of this run.
-	snapshot string
+	// snapshot is this run's snapshot file, holding snapshotData: every
+	// setting changed in this run, with its value from before the change.
+	snapshot     string
+	snapshotData settingsSnapshot
+	snapshotIDs  map[int]bool
+	// pendingSave is set when a change reached the car but the save didn't,
+	// because the connection dropped; the save is sent on reconnect.
+	pendingSave bool
 
 	// changeMu makes changes run one at a time.
 	changeMu sync.Mutex
@@ -389,7 +396,7 @@ func (m *mqttClient) changeVehicleSetting(id, value int) {
 	m.vs.mu.Unlock()
 	change := fmt.Sprintf("%s -> %s", vehicleSettingName(id), protocol.SettingOptionLabel(id, value, &s))
 
-	if err := m.snapshotVehicleSettings(); err != nil {
+	if err := m.snapshotVehicleSettings(id); err != nil {
 		m.reportVehicleSettingChange(change + ": not changed, the snapshot could not be saved: " + err.Error())
 		return
 	}
@@ -400,7 +407,10 @@ func (m *mqttClient) changeVehicleSetting(id, value int) {
 	}
 	confirmed := m.waitVehicleSetting(id, value)
 	if err := m.writeVehicleRegister(protocol.SaveVehicleSettingsRegister, []byte{0}); err != nil {
-		m.reportVehicleSettingChange(change + ": sent but not saved, " + err.Error())
+		m.vs.mu.Lock()
+		m.vs.pendingSave = true
+		m.vs.mu.Unlock()
+		m.reportVehicleSettingChange(change + ": sent but not saved (" + err.Error() + "), saving when the car reconnects")
 		return
 	}
 	if !confirmed {
@@ -408,6 +418,32 @@ func (m *mqttClient) changeVehicleSetting(id, value int) {
 		return
 	}
 	m.reportVehicleSettingChange(change + ": done")
+}
+
+// pendingSaveDelay lets a new session with the car settle before a save.
+var pendingSaveDelay = 5 * time.Second
+
+// savePendingVehicleSettings sends the save that a change couldn't send
+// because the car disconnected. It runs when a session with the car starts;
+// a save on its own only stores the car's current settings.
+func (m *mqttClient) savePendingVehicleSettings() {
+	m.vs.mu.Lock()
+	pending := m.vs.pendingSave
+	m.vs.mu.Unlock()
+	if !pending {
+		return
+	}
+	time.Sleep(pendingSaveDelay)
+	m.vs.changeMu.Lock()
+	defer m.vs.changeMu.Unlock()
+	if err := m.writeVehicleRegister(protocol.SaveVehicleSettingsRegister, []byte{0}); err != nil {
+		log.Warnf("Vehicle settings: saving after reconnect failed, trying again next time: %v", err)
+		return
+	}
+	m.vs.mu.Lock()
+	m.vs.pendingSave = false
+	m.vs.mu.Unlock()
+	m.reportVehicleSettingChange("saved the last change after the car reconnected")
 }
 
 func (m *mqttClient) writeVehicleRegister(register byte, data []byte) error {
@@ -473,40 +509,62 @@ type snapshotSetting struct {
 	Label string `json:"label"`
 }
 
-// snapshotVehicleSettings saves every known setting before the first change
-// of a run.
-func (m *mqttClient) snapshotVehicleSettings() error {
+func snapshotEntry(id int, s protocol.VehicleSetting) snapshotSetting {
+	return snapshotSetting{ID: id, Name: vehicleSettingName(id), Value: s.Value, Label: protocol.SettingOptionLabel(id, s.Value, &s)}
+}
+
+// snapshotVehicleSettings makes sure this run's snapshot holds the setting
+// about to change, with its value from before any change. The first change
+// of a run saves every known setting; a setting the car reports only later
+// is added the first time it is changed. Changes run one at a time, so this
+// never races with itself.
+func (m *mqttClient) snapshotVehicleSettings(id int) error {
 	m.vs.mu.Lock()
-	if m.vs.snapshot != "" {
+	if m.vs.snapshot != "" && m.vs.snapshotIDs[id] {
 		m.vs.mu.Unlock()
 		return nil
 	}
-	snap := settingsSnapshot{Taken: time.Now().Format(time.RFC3339)}
-	for id, s := range m.vs.settings.All() {
-		if protocol.SettingAvailable(id, s) {
-			snap.Settings = append(snap.Settings, snapshotSetting{
-				ID: id, Name: vehicleSettingName(id), Value: s.Value, Label: protocol.SettingOptionLabel(id, s.Value, &s)})
+	snap := m.vs.snapshotData
+	ids := map[int]bool{}
+	for k := range m.vs.snapshotIDs {
+		ids[k] = true
+	}
+	if m.vs.snapshot == "" {
+		snap = settingsSnapshot{Taken: time.Now().Format(time.RFC3339)}
+		for sid, s := range m.vs.settings.All() {
+			if protocol.SettingAvailable(sid, s) {
+				snap.Settings = append(snap.Settings, snapshotEntry(sid, s))
+				ids[sid] = true
+			}
 		}
 	}
+	if !ids[id] {
+		s, _ := m.vs.settings.Get(id)
+		snap.Settings = append(append([]snapshotSetting(nil), snap.Settings...), snapshotEntry(id, s))
+		ids[id] = true
+	}
+	path := m.vs.snapshot
 	m.vs.mu.Unlock()
 	sort.Slice(snap.Settings, func(i, j int) bool { return snap.Settings[i].ID < snap.Settings[j].ID })
 
-	dir := viper.GetString("state_dir")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
+	if path == "" {
+		dir := viper.GetString("state_dir")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		path = filepath.Join(dir, "vehicle-settings-"+time.Now().Format("20060102-150405")+".json")
 	}
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "vehicle-settings-"+time.Now().Format("20060102-150405")+".json")
 	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
 		return err
 	}
 	m.vs.mu.Lock()
-	m.vs.snapshot = path
+	m.vs.snapshot, m.vs.snapshotData, m.vs.snapshotIDs = path, snap, ids
 	m.vs.mu.Unlock()
-	log.Infof("Vehicle settings: saved a snapshot of %d settings to %s", len(snap.Settings), path)
+	log.Infof("Vehicle settings: snapshot %s holds %d settings", path, len(snap.Settings))
 	return nil
 }
 

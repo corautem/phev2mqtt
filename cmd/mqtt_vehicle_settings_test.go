@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -394,5 +395,77 @@ func TestRestoreSnapshot(t *testing.T) {
 	}
 	if snap, err := loadSnapshot(files[0]); err != nil || snap.Settings[0].ID != 7 || snap.Settings[0].Value != 0 {
 		t.Errorf("gateway snapshot = %+v, %v", snap, err)
+	}
+}
+
+// A setting the car reports after the first change is added to the
+// snapshot, with its old value, before it is changed.
+func TestVehicleSettingsSnapshotGrows(t *testing.T) {
+	m, f, _, _ := writeTestClient(t)
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "3 minutes"})
+	waitLastChange(t, f, "-> 3 minutes: done")
+
+	// id 13 arrives later: mask 15, "Off".
+	m.publishVehicleSettings(0x16, settingNotification(13, protocol.VehicleSetting{Mask: 15, Value: 0}))
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/13", payload: "30 minutes"})
+	waitLastChange(t, f, "-> 30 minutes: done")
+	// A second change of id 7 doesn't overwrite its original value.
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "1 minute"})
+	waitLastChange(t, f, "-> 1 minute: done")
+
+	files, _ := filepath.Glob(filepath.Join(viper.GetString("state_dir"), "vehicle-settings-*.json"))
+	if len(files) != 1 {
+		t.Fatalf("snapshots = %v", files)
+	}
+	snap, err := loadSnapshot(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]string{}
+	for _, s := range snap.Settings {
+		got[s.ID] = s.Label
+	}
+	want := map[int]string{7: "Off", 11: "3 minutes", 13: "Off"}
+	if len(got) != len(want) {
+		t.Errorf("snapshot = %v, want %v", got, want)
+	}
+	for id, label := range want {
+		if got[id] != label {
+			t.Errorf("snapshot id %d = %q, want %q", id, got[id], label)
+		}
+	}
+}
+
+// A change whose save failed because the car disconnected is saved when the
+// car reconnects.
+func TestVehicleSettingsSaveAfterReconnect(t *testing.T) {
+	defer func(d time.Duration) { pendingSaveDelay = d }(pendingSaveDelay)
+	pendingSaveDelay = 0
+	m, f, writes, _ := writeTestClient(t)
+	inner := m.vs.setRegister
+	failSave := true
+	m.vs.setRegister = func(register byte, data []byte) error {
+		if register == protocol.SaveVehicleSettingsRegister && failSave {
+			return fmt.Errorf("client closed")
+		}
+		return inner(register, data)
+	}
+
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "1 minute"})
+	waitLastChange(t, f, "sent but not saved (client closed), saving when the car reconnects")
+
+	// Reconnected, still failing: stays pending.
+	m.savePendingVehicleSettings()
+	failSave = false
+	m.savePendingVehicleSettings()
+	waitLastChange(t, f, "saved the last change after the car reconnected")
+	if want := "0f0701,0e00"; strings.Join(*writes, ",") != want {
+		t.Errorf("writes = %v, want %s", *writes, want)
+	}
+	// Nothing pending any more.
+	*writes = nil
+	m.savePendingVehicleSettings()
+	if len(*writes) != 0 {
+		t.Errorf("saved again: %v", *writes)
 	}
 }

@@ -462,6 +462,7 @@ func (m *mqttClient) handlePhev(cmd *cobra.Command) error {
 	m.client.Publish(m.topic("/available"), 0, true, "online")
 	m.status.Reset()
 	m.status.MY14 = m.phev.ModelYear == client.ModelYear14
+	go m.savePendingVehicleSettings()
 
 	m.lastError = nil
 
