@@ -445,7 +445,7 @@ func (m *mqttClient) handleIncomingMqtt(mqtt_client mqtt.Client, msg mqtt.Messag
 func (m *mqttClient) handlePhev(cmd *cobra.Command) error {
 	var err error
 	address := viper.GetString("address")
-	m.phev, err = client.New(client.AddressOption(address))
+	m.phev, err = client.New(client.AddressOption(address), client.KeyResyncOption(viper.GetBool("key_resync")))
 	if err != nil {
 		return err
 	}

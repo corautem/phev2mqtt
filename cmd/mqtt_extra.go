@@ -149,4 +149,6 @@ func (m *mqttClient) publishExtraStatus(register byte, data []byte) {
 func init() {
 	mqttCmd.Flags().Bool("extra_sensors", false, "Publish extra status sensors (power switch, alarm, charge type, car timers, ...)")
 	viper.BindPFlag("extra_sensors", mqttCmd.Flags().Lookup("extra_sensors"))
+	mqttCmd.Flags().Bool("key_resync", false, "Recover from the car's encoding complaints: resync to the key it expects, cap resends, ask for a new key")
+	viper.BindPFlag("key_resync", mqttCmd.Flags().Lookup("key_resync"))
 }
