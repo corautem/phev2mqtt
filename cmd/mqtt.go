@@ -206,6 +206,7 @@ func (m *mqttClient) Run(cmd *cobra.Command, args []string) error {
 				log.Errorf("Error subscribing to %s: %v", t, token.Error())
 			}
 		}
+		m.subscribeVehicleSettings(mqtt_client)
 		availability := "offline"
 		if m.carConnected {
 			availability = "online"
@@ -326,6 +327,8 @@ func (m *mqttClient) handleIncomingMqtt(mqtt_client mqtt.Client, msg mqtt.Messag
 			log.Infof("Error setting register %02x: %v", register[0], err)
 			return
 		}
+	} else if strings.HasPrefix(msg.Topic(), m.topic(vehicleSettingCommandPrefix)) {
+		m.handleVehicleSettingCommand(msg)
 	} else if msg.Topic() == m.topic("/connection") {
 		payload := strings.ToLower(string(msg.Payload()))
 		switch payload {

@@ -238,3 +238,50 @@ func TestVehicleSettingsArbitraryInput(t *testing.T) {
 		}
 	}
 }
+
+func TestVehicleSettingsSeed(t *testing.T) {
+	var v VehicleSettings
+	if !v.Seed(7, VehicleSetting{31, 1}) || v.Seed(7, VehicleSetting{31, 2}) {
+		t.Error("seeding the same id twice")
+	}
+	if v.Known() {
+		t.Error("seeded settings count as reported by the car")
+	}
+	// The car's own report wins over a seeded value.
+	v.Update(mustHex(t, "02073e000000000000"))
+	if s, _ := v.Get(7); s.Value != 0 {
+		t.Errorf("id 7 = %+v after the car reported value 0", s)
+	}
+	if v.Seed(7, VehicleSetting{31, 3}) {
+		t.Error("seed overwrote a reported setting")
+	}
+	if v.Seed(0, VehicleSetting{1, 0}) || v.Seed(61, VehicleSetting{1, 0}) {
+		t.Error("seeded an id out of range")
+	}
+	all := v.All()
+	all[7] = VehicleSetting{}
+	if s, _ := v.Get(7); s.Mask != 31 {
+		t.Error("All returned the internal map")
+	}
+}
+
+func TestOptionByLabel(t *testing.T) {
+	s := VehicleSetting{0b101001, 3}
+	tests := []struct {
+		label string
+		want  int
+		ok    bool
+	}{
+		{"Off", 0, true},
+		{"On (type 2)", 3, true},
+		{"On (type 3)", 5, true},
+		{"On", 0, false},          // ambiguous for this car, so never offered
+		{"On (type 1)", 0, false}, // option 2 is not in this car's mask
+		{"Tail Lamp/Head Lamp: Cutout always", 0, false},
+	}
+	for _, test := range tests {
+		if got, ok := OptionByLabel(12, s, test.label); got != test.want || ok != test.ok {
+			t.Errorf("OptionByLabel(%q) = %d %v, want %d %v", test.label, got, ok, test.want, test.ok)
+		}
+	}
+}

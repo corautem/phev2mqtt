@@ -41,6 +41,11 @@ type SettingDef struct {
 const (
 	minSettingID = 1
 	maxSettingID = 60
+
+	// SetVehicleSettingRegister changes one setting: [id, value].
+	SetVehicleSettingRegister = 0x0f
+	// SaveVehicleSettingsRegister saves changed settings: [0].
+	SaveVehicleSettingsRegister = 0x0e
 )
 
 // DecodeSettingPair decodes one (A, B) pair of a 0x16 notification. It
@@ -221,4 +226,38 @@ func (v *VehicleSettings) Get(id int) (VehicleSetting, bool) {
 // Known reports whether the car has sent any settings notification.
 func (v *VehicleSettings) Known() bool {
 	return v.settings != nil && v.Status >= 0
+}
+
+// Seed records a setting remembered from an earlier run, unless the car has
+// already reported that id. It reports whether the setting was added.
+func (v *VehicleSettings) Seed(id int, s VehicleSetting) bool {
+	if v.settings == nil {
+		v.settings = map[int]VehicleSetting{}
+		v.Status = -1
+	}
+	if _, known := v.settings[id]; known || id < minSettingID || id > maxSettingID {
+		return false
+	}
+	v.settings[id] = s
+	return true
+}
+
+// All returns a copy of every setting known so far.
+func (v *VehicleSettings) All() map[int]VehicleSetting {
+	out := make(map[int]VehicleSetting, len(v.settings))
+	for id, s := range v.settings {
+		out[id] = s
+	}
+	return out
+}
+
+// OptionByLabel returns the option of the setting whose label (as
+// SettingOptionLabel gives it for s) is label, among the options s offers.
+func OptionByLabel(id int, s VehicleSetting, label string) (int, bool) {
+	for _, o := range SettingOptions(id, s) {
+		if SettingOptionLabel(id, o, &s) == label {
+			return o, true
+		}
+	}
+	return 0, false
 }
