@@ -327,6 +327,8 @@ func (m *mqttClient) handleIncomingMqtt(mqtt_client mqtt.Client, msg mqtt.Messag
 			log.Infof("Error setting register %02x: %v", register[0], err)
 			return
 		}
+	} else if msg.Topic() == m.topic(vehicleSettingsAllowCommand) {
+		m.handleAllowChangesCommand(msg)
 	} else if strings.HasPrefix(msg.Topic(), m.topic(vehicleSettingCommandPrefix)) {
 		m.handleVehicleSettingCommand(msg)
 	} else if msg.Topic() == m.topic("/connection") {

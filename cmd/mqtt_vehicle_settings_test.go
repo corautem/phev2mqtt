@@ -91,6 +91,9 @@ func TestVehicleSettingsRead(t *testing.T) {
 	if got["homeassistant/sensor/"+testVIN+"_"+vehicleSettingsLastChangeKey+"/config"] != "" {
 		t.Error("read mode announced the last change sensor")
 	}
+	if got["homeassistant/switch/"+testVIN+"_"+vehicleSettingsAllowKey+"/config"] != "" {
+		t.Error("read mode announced the Allow Changes switch")
+	}
 
 	// A setting reported later is announced as it arrives.
 	m.publishVehicleSettings(0x16, mustBytes(t, "02473e0d1e000000"))
@@ -135,6 +138,7 @@ func TestVehicleSettingsOff(t *testing.T) {
 		settingConfigTopic("sensor", 7), settingConfigTopic("select", 7),
 		"phev/vehicle_setting/7", "phev/vehicle_setting/7/attributes",
 		"phev/vehicle_settings/status", "phev/vehicle_settings/known", "phev/vehicle_settings/last_change",
+		"phev/vehicle_settings/allow_changes",
 	} {
 		if payload, ok := got[topic]; !ok || payload != "" || !f.retained(topic) {
 			t.Errorf("off mode: %s = %q (present %v), want an empty retained message", topic, payload, ok)
@@ -175,6 +179,7 @@ func writeTestClient(t *testing.T) (*mqttClient, *fakeMQTT, *[]string, *bool) {
 	}
 	m.publishVehicleSettings(0x16, mustBytes(t, "02073e8bff000000"))
 	m.publishVehicleSettingsDiscovery(testVIN, "phev", "Phev")
+	m.setAllowChanges(true)
 	f.reset()
 	return m, f, writes, silent
 }
@@ -216,6 +221,12 @@ func TestVehicleSettingsWriteDiscovery(t *testing.T) {
 	}
 	if got["homeassistant/sensor/"+testVIN+"_"+vehicleSettingsLastChangeKey+"/config"] == "" {
 		t.Error("last change sensor not announced")
+	}
+	if !strings.Contains(got["homeassistant/switch/"+testVIN+"_"+vehicleSettingsAllowKey+"/config"], `"command_topic":"~/set/vehicle_settings_allow_changes"`) {
+		t.Errorf("Allow Changes switch config = %q", got["homeassistant/switch/"+testVIN+"_"+vehicleSettingsAllowKey+"/config"])
+	}
+	if got["phev/vehicle_settings/allow_changes"] != "ON" || !f.retained("phev/vehicle_settings/allow_changes") {
+		t.Errorf("Allow Changes state = %q", got["phev/vehicle_settings/allow_changes"])
 	}
 }
 
@@ -346,7 +357,7 @@ func TestVehicleSettingsRemembered(t *testing.T) {
 func TestVehicleSettingsCleanup(t *testing.T) {
 	for _, e := range []haEntity{
 		vehicleSettingSensor(7), vehicleSettingSelect(7, protocol.VehicleSetting{Mask: 31}),
-		vehicleSettingsStatusEntity, vehicleSettingsLastChangeEntity,
+		vehicleSettingsStatusEntity, vehicleSettingsLastChangeEntity, vehicleSettingsAllowEntity,
 	} {
 		if !cleanupTarget(e.discoveryTopic("homeassistant", testVIN), []byte(e.config(testVIN, "phev", "Phev"))) {
 			t.Errorf("cleanup misses %s %s", e.component, e.key)
@@ -467,5 +478,78 @@ func TestVehicleSettingsSaveAfterReconnect(t *testing.T) {
 	m.savePendingVehicleSettings()
 	if len(*writes) != 0 {
 		t.Errorf("saved again: %v", *writes)
+	}
+}
+
+func allowState(f *fakeMQTT) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pub["phev/vehicle_settings/allow_changes"]
+}
+
+func TestVehicleSettingsAllowChanges(t *testing.T) {
+	m, f, writes, _ := writeTestClient(t)
+	allow := func(payload string, retained bool) {
+		m.handleAllowChangesCommand(fakeMessage{topic: "phev/set/vehicle_settings_allow_changes", payload: payload, retained: retained})
+	}
+
+	// Locked: changes are refused.
+	allow("OFF", false)
+	if allowState(f) != "OFF" {
+		t.Errorf("state after OFF = %q", allowState(f))
+	}
+	waitLastChange(t, f, "changes locked")
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "1 minute"})
+	waitLastChange(t, f, `refused, changes are locked, switch on "Allow Changes" first`)
+	if len(*writes) != 0 {
+		t.Errorf("locked: wrote %v", *writes)
+	}
+
+	// A retained ON (a replay) doesn't unlock.
+	allow("ON", true)
+	if allowState(f) != "OFF" {
+		t.Error("retained ON unlocked changes")
+	}
+
+	// Unlocked: the change goes through.
+	allow("ON", false)
+	waitLastChange(t, f, "changes unlocked for 10 minutes")
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "1 minute"})
+	waitLastChange(t, f, "-> 1 minute: done")
+
+	// Changes lock again by themselves...
+	m.vs.mu.Lock()
+	m.vs.allowWindow = 300 * time.Millisecond
+	m.vs.mu.Unlock()
+	allow("ON", false)
+	if allowState(f) != "ON" {
+		t.Errorf("state after ON = %q", allowState(f))
+	}
+	// ...but a change restarts the window.
+	time.Sleep(200 * time.Millisecond)
+	m.handleVehicleSettingCommand(fakeMessage{topic: "phev/set/vehicle_setting/7", payload: "Off"})
+	waitLastChange(t, f, "-> Off: done")
+	time.Sleep(200 * time.Millisecond)
+	if allowState(f) != "ON" {
+		t.Error("a change didn't extend the window")
+	}
+	time.Sleep(400 * time.Millisecond)
+	if allowState(f) != "OFF" {
+		t.Error("changes didn't lock again by themselves")
+	}
+	waitLastChange(t, f, "changes locked")
+}
+
+func TestVehicleSettingsAllowChangesOnlyInWriteMode(t *testing.T) {
+	m, f := newTestClient()
+	m.vs.mode = vehicleSettingsRead
+	m.setAllowChanges(true)
+	if got := f.reset(); len(got) != 0 {
+		t.Errorf("read mode published %v", got)
+	}
+	m.vs.mu.Lock()
+	defer m.vs.mu.Unlock()
+	if m.vs.allowChanges {
+		t.Error("read mode unlocked changes")
 	}
 }

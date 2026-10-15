@@ -21,7 +21,8 @@ which changes those that differ on the car, one at a time.
 
 The gateway saves a snapshot in its --state_dir (default /var/lib/phev2mqtt)
 before the first change of each run, named vehicle-settings-<date>-<time>.json.
-It must run with VEHICLE_SETTINGS=write and be connected to the car. Follow the
+It must run with VEHICLE_SETTINGS=write and be connected to the car; the
+restore switches on "Allow Changes" itself. Follow the
 progress in Home Assistant's "Vehicle Settings Last Change" sensor, or in the
 gateway's log.
 `,
@@ -72,6 +73,11 @@ func runRestoreSettings(cmd *cobra.Command, args []string) error {
 	defer c.Disconnect(250)
 
 	log.Infof("Restoring %d vehicle settings from %s (taken %s)", len(snap.Settings), file, snap.Taken)
+	// Running a restore is deliberate: unlock changes for it.
+	if token := c.Publish(prefix+vehicleSettingsAllowCommand, 1, false, "ON"); token.Wait() && token.Error() != nil {
+		return token.Error()
+	}
+	time.Sleep(500 * time.Millisecond)
 	for _, s := range snap.Settings {
 		topic, payload := restoreCommand(prefix, s)
 		if token := c.Publish(topic, 1, false, payload); token.Wait() && token.Error() != nil {

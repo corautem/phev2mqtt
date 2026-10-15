@@ -73,6 +73,12 @@ type vehicleSettingsState struct {
 	// pendingSave is set when a change reached the car but the save didn't,
 	// because the connection dropped; the save is sent on reconnect.
 	pendingSave bool
+	// allowChanges is the "Allow Changes" switch, the lock on changes: off
+	// at every start, and off again allowWindow after it was switched on or
+	// after the last change.
+	allowChanges bool
+	allowTimer   *time.Timer
+	allowWindow  time.Duration
 
 	// changeMu makes changes run one at a time.
 	changeMu sync.Mutex
@@ -85,13 +91,17 @@ type vehicleSettingsState struct {
 const (
 	vehicleSettingsStatusKey     = "vehicle_settings_status"
 	vehicleSettingsLastChangeKey = "vehicle_settings_last_change"
+	vehicleSettingsAllowKey      = "vehicle_settings_allow_changes"
 
 	vehicleSettingsStatusTopic     = "/vehicle_settings/status"
 	vehicleSettingsLastChangeTopic = "/vehicle_settings/last_change"
 	vehicleSettingsKnownTopic      = "/vehicle_settings/known"
+	vehicleSettingsAllowTopic      = "/vehicle_settings/allow_changes"
+	vehicleSettingsAllowCommand    = "/set/vehicle_settings_allow_changes"
 	vehicleSettingCommandPrefix    = "/set/vehicle_setting/"
 
 	defaultConfirmTimeout = 8 * time.Second
+	defaultAllowWindow    = 10 * time.Minute
 )
 
 func vehicleSettingKey(id int) string { return fmt.Sprintf("vehicle_setting_%d", id) }
@@ -131,15 +141,20 @@ func vehicleSettingSelect(id int, s protocol.VehicleSetting) haEntity {
 		"json_attributes_topic": "~" + attributes}}
 }
 
-var vehicleSettingsStatusEntity = sensorEntity(vehicleSettingsStatusKey, "Vehicle Settings Changes", "~"+vehicleSettingsStatusTopic, map[string]interface{}{
+var vehicleSettingsStatusEntity = sensorEntity(vehicleSettingsStatusKey, "Car Accepts Setting Changes", "~"+vehicleSettingsStatusTopic, map[string]interface{}{
 	"device_class": "enum", "options": []string{"allowed", "refused"}, "icon": "mdi:car-cog", "entity_category": "diagnostic"})
 
 var vehicleSettingsLastChangeEntity = sensorEntity(vehicleSettingsLastChangeKey, "Vehicle Settings Last Change", "~"+vehicleSettingsLastChangeTopic, map[string]interface{}{
 	"icon": "mdi:history", "entity_category": "diagnostic"})
 
+// vehicleSettingsAllowEntity is the lock on changes in write mode.
+var vehicleSettingsAllowEntity = haEntity{component: "switch", key: vehicleSettingsAllowKey, name: "Vehicle Settings: Allow Changes", fields: map[string]interface{}{
+	"state_topic": "~" + vehicleSettingsAllowTopic, "command_topic": "~" + vehicleSettingsAllowCommand,
+	"payload_on": "ON", "payload_off": "OFF", "icon": "mdi:lock-open-variant", "entity_category": "config"}}
+
 // vehicleSettingsKeys are the keys of every entity vehicle settings can add.
 func vehicleSettingsKeys() []string {
-	keys := []string{vehicleSettingsStatusKey, vehicleSettingsLastChangeKey}
+	keys := []string{vehicleSettingsStatusKey, vehicleSettingsLastChangeKey, vehicleSettingsAllowKey}
 	for _, id := range protocol.SettingIDs() {
 		keys = append(keys, vehicleSettingKey(id))
 	}
@@ -174,6 +189,10 @@ func (m *mqttClient) publishVehicleSettingsDiscovery(vin, topic, name string) {
 
 	m.announce(vehicleSettingsStatusEntity, vin, topic, name, mode != vehicleSettingsOff)
 	m.announce(vehicleSettingsLastChangeEntity, vin, topic, name, mode == vehicleSettingsWrite)
+	m.announce(vehicleSettingsAllowEntity, vin, topic, name, mode == vehicleSettingsWrite)
+	if mode == vehicleSettingsWrite {
+		m.client.Publish(m.topic(vehicleSettingsAllowTopic), 0, true, onOffUpper(m.vs.allowChanges))
+	}
 	for _, id := range protocol.SettingIDs() {
 		if mode != vehicleSettingsRead {
 			m.announce(vehicleSettingSensor(id), vin, topic, name, false)
@@ -183,7 +202,7 @@ func (m *mqttClient) publishVehicleSettingsDiscovery(vin, topic, name string) {
 		}
 	}
 	if mode == vehicleSettingsOff {
-		for _, t := range []string{vehicleSettingsStatusTopic, vehicleSettingsLastChangeTopic, vehicleSettingsKnownTopic} {
+		for _, t := range []string{vehicleSettingsStatusTopic, vehicleSettingsLastChangeTopic, vehicleSettingsKnownTopic, vehicleSettingsAllowTopic} {
 			m.client.Publish(m.topic(t), 0, true, "")
 		}
 		for _, id := range protocol.SettingIDs() {
@@ -347,6 +366,9 @@ func (m *mqttClient) vehicleSettingTarget(id int, payload string) (int, string) 
 	if m.vs.mode != vehicleSettingsWrite {
 		return 0, "changes are not switched on (VEHICLE_SETTINGS=write)"
 	}
+	if !m.vs.allowChanges {
+		return 0, `changes are locked, switch on "Allow Changes" first`
+	}
 	if _, ok := protocol.SettingDefinition(id); !ok {
 		return 0, "not a setting that can be changed"
 	}
@@ -418,6 +440,89 @@ func (m *mqttClient) changeVehicleSetting(id, value int) {
 		return
 	}
 	m.reportVehicleSettingChange(change + ": done")
+	m.extendAllowChanges()
+}
+
+func onOffUpper(on bool) string {
+	if on {
+		return "ON"
+	}
+	return "OFF"
+}
+
+func (m *mqttClient) allowWindowLocked() time.Duration {
+	if m.vs.allowWindow == 0 {
+		return defaultAllowWindow
+	}
+	return m.vs.allowWindow
+}
+
+func describeWindow(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute == 0 {
+		return fmt.Sprintf("%d minutes", d/time.Minute)
+	}
+	return d.String()
+}
+
+// handleAllowChangesCommand switches the lock on changes, from Home
+// Assistant or from restore-settings.
+func (m *mqttClient) handleAllowChangesCommand(msg mqtt.Message) {
+	if msg.Retained() {
+		log.Warnf("Ignoring retained command on %s", msg.Topic())
+		return
+	}
+	switch strings.ToUpper(strings.TrimSpace(string(msg.Payload()))) {
+	case "ON":
+		m.setAllowChanges(true)
+	case "OFF":
+		m.setAllowChanges(false)
+	}
+}
+
+// setAllowChanges locks or unlocks changes. Unlocked, they lock again after
+// the window unless a change extends it.
+func (m *mqttClient) setAllowChanges(on bool) {
+	m.vs.mu.Lock()
+	if m.vs.mode != vehicleSettingsWrite {
+		m.vs.mu.Unlock()
+		return
+	}
+	m.vs.allowChanges = on
+	if m.vs.allowTimer != nil {
+		m.vs.allowTimer.Stop()
+		m.vs.allowTimer = nil
+	}
+	window := m.allowWindowLocked()
+	if on {
+		m.vs.allowTimer = time.AfterFunc(window, m.relockChanges)
+	}
+	m.vs.mu.Unlock()
+
+	m.client.Publish(m.topic(vehicleSettingsAllowTopic), 0, true, onOffUpper(on))
+	if on {
+		m.reportVehicleSettingChange("changes unlocked for " + describeWindow(window))
+	} else {
+		m.reportVehicleSettingChange("changes locked")
+	}
+}
+
+func (m *mqttClient) relockChanges() {
+	m.vs.mu.Lock()
+	on := m.vs.allowChanges
+	m.vs.mu.Unlock()
+	if on {
+		m.setAllowChanges(false)
+	}
+}
+
+// extendAllowChanges restarts the window after a change, so a series of
+// changes, or a restore, isn't cut short.
+func (m *mqttClient) extendAllowChanges() {
+	m.vs.mu.Lock()
+	defer m.vs.mu.Unlock()
+	if m.vs.allowChanges && m.vs.allowTimer != nil {
+		m.vs.allowTimer.Reset(m.allowWindowLocked())
+	}
 }
 
 // pendingSaveDelay lets a new session with the car settle before a save.
