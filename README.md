@@ -35,6 +35,10 @@ Copyright 2021 Ben Buxton <bbuxton@gmail.com>
 
 Contributions and PRs are welcome.
 
+### Credits
+
+Parts of this fork were ported from [PHEV Link](https://github.com/Anwo91/phev-remote-plus) (phev-remote-plus) by Anwo91, from its releases published under the GNU General Public License, version 3 or later (versions up to 1.0.91, October 2026): the register layouts behind the extra status sensors, the vehicle settings format and catalogue, the commands behind the extra buttons and the climate guard, and the key resync after the car's encoding complaints. PHEV Link has since become proprietary; nothing from its later versions is used.
+
 ## Getting started.
 
 ### Compiling
