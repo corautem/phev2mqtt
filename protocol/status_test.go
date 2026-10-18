@@ -114,6 +114,24 @@ func TestStatusTrackerSchedules(t *testing.T) {
 	}
 }
 
+func TestChargeTimerProgrammed(t *testing.T) {
+	// Field log (2014 car): every slot unset.
+	if ChargeTimerProgrammed(mustHex(t, "ffffffff07ffff1fffffffff07ffff1f")) {
+		t.Error("an empty programme counts as programmed")
+	}
+	var charge []byte
+	charge = append(charge, pack(map[int]int{1: 22}, 5, 5, 31)...)
+	charge = append(charge, pack(map[int]int{1: 3}, 3, 3, 7)...)
+	charge = append(charge, pack(map[int]int{1: 6}, 5, 5, 31)...)
+	charge = append(charge, pack(map[int]int{1: 0}, 3, 3, 7)...)
+	if !ChargeTimerProgrammed(charge) {
+		t.Error("Monday 22:30-06:00 doesn't count as programmed")
+	}
+	if ChargeTimerProgrammed([]byte{1, 2}) {
+		t.Error("a short register counts as programmed")
+	}
+}
+
 func TestStatusTrackerFullDaysBeforeSchedule(t *testing.T) {
 	tr := &StatusTracker{}
 	if got := tr.Update(0x0e, []byte{0x02}); len(got) != 0 {

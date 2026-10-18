@@ -137,6 +137,23 @@ func TestCommandButtonsRefused(t *testing.T) {
 	}
 }
 
+func TestResumeChargeTimerNeedsAProgramme(t *testing.T) {
+	m, f, writes := commandTestClient(t, nil)
+	m.regs.put(protocol.ChargeTimerProgRegister, mustBytes(t, "ffffffff07ffff1fffffffff07ffff1f"))
+	press(m, "/set/resume_charge_timer")
+	waitResult(t, f, "Resume Car Charge Timer: refused, the car has no charge timer programmed")
+	if len(writes()) != 0 {
+		t.Errorf("wrote %v", writes())
+	}
+	// Monday 22:30-06:00 programmed: allowed.
+	m.regs.put(protocol.ChargeTimerProgRegister, mustBytes(t, "dffeffff07dfff1fdffcffff07c7ff1f"))
+	press(m, "/set/resume_charge_timer")
+	waitResult(t, f, "Resume Car Charge Timer: done")
+	if got := strings.Join(writes(), ","); got != "1702" {
+		t.Errorf("writes %s, want 1702", got)
+	}
+}
+
 func TestIsCommandButton(t *testing.T) {
 	m, _ := newTestClient()
 	for topic, want := range map[string]bool{

@@ -173,6 +173,13 @@ func (m *mqttClient) runCommandButton(topic string) {
 		// reports unplugged with the cable in.
 		err = m.carWrite(regChargeTimer, []byte{0x01})
 	case "/set/resume_charge_timer":
+		// With no charge window programmed, a timer switched on could leave
+		// the car waiting for a window that never comes; with no timer the
+		// car should charge as soon as it is plugged in (phev-remote-plus).
+		if prog, ok := m.regs.get(protocol.ChargeTimerProgRegister); ok && !protocol.ChargeTimerProgrammed(prog) {
+			m.reportCommand(name + ": refused, the car has no charge timer programmed")
+			return
+		}
 		err = m.carWrite(regChargeTimer, []byte{0x02})
 	}
 	if err != nil {

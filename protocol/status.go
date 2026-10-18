@@ -208,6 +208,21 @@ func (t *StatusTracker) chargeSchedule() (string, bool) {
 	return mustJSON(days), true
 }
 
+// ChargeTimerProgrammed reports whether the car's charge timer programme
+// (register 0x18) has a charge window on any day.
+func ChargeTimerProgrammed(b []byte) bool {
+	if len(b) < 16 {
+		return false
+	}
+	startH, endH := scheduleField(b, 0, 5, 31), scheduleField(b, 8, 5, 31)
+	for d := 0; d < 7; d++ {
+		if startH[d] <= 23 || endH[d] <= 23 {
+			return true
+		}
+	}
+	return false
+}
+
 // climateSchedule describes the car's own climate timer start time per
 // programmed day, e.g. {"tue":"07:00"}, as JSON for HA attributes.
 func climateSchedule(b []byte) string {
