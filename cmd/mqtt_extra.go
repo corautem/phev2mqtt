@@ -109,6 +109,7 @@ type optionalFeature struct {
 
 var optionalFeatures = []optionalFeature{
 	{"extra_sensors", extraSensorEntities},
+	{"extra_commands", extraCommandEntities},
 }
 
 // publishOptionalDiscovery announces the entities of every enabled optional

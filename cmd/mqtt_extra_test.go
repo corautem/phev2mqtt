@@ -25,8 +25,13 @@ func TestOptionalEntityConfigs(t *testing.T) {
 			if got, want := c["unique_id"], testVIN+"_"+e.key; got != want {
 				t.Errorf("%s: unique_id %v, want %v", e.key, got, want)
 			}
-			if st, _ := c["state_topic"].(string); !strings.HasPrefix(st, "~/") {
-				t.Errorf("%s: state_topic %q is not under the topic prefix", e.key, st)
+			// Sensors have a state topic, buttons only a command topic.
+			topic, _ := c["state_topic"].(string)
+			if topic == "" {
+				topic, _ = c["command_topic"].(string)
+			}
+			if !strings.HasPrefix(topic, "~/") {
+				t.Errorf("%s: topic %q is not under the topic prefix", e.key, topic)
 			}
 			want := "homeassistant/" + e.component + "/" + testVIN + "_" + e.key + "/config"
 			if got := e.discoveryTopic("homeassistant", testVIN); got != want {

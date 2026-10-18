@@ -72,6 +72,8 @@ func (c *climate) mqttStates() map[string]string {
 		"/climate/cool":       "off",
 		"/climate/heat":       "off",
 		"/climate/windscreen": "off",
+		// State of the "climate state" select: the running mode or "off".
+		"/climate/mode": "off",
 	}
 	if c.mode == nil || c.state == nil {
 		return m
@@ -95,10 +97,13 @@ func (c *climate) mqttStates() map[string]string {
 	switch *c.mode {
 	case "cool":
 		m["/climate/cool"] = "on"
+		m["/climate/mode"] = "cool"
 	case "heat":
 		m["/climate/heat"] = "on"
+		m["/climate/mode"] = "heat"
 	case "windscreen":
 		m["/climate/windscreen"] = "on"
+		m["/climate/mode"] = "windscreen"
 	}
 	return m
 }
@@ -159,6 +164,16 @@ type mqttClient struct {
 	extraSensors bool
 	status       protocol.StatusTracker
 	vs           vehicleSettingsState
+
+	extraCommands bool
+	climateGuard  bool
+	// regs holds the latest value of each register in the current session.
+	regs     regCache
+	carModel client.ModelYear
+	// commandMu makes extra commands and guarded climate run one at a time.
+	commandMu sync.Mutex
+	// carWriteHook replaces the car in tests.
+	carWriteHook func(register byte, data []byte) error
 }
 
 func (m *mqttClient) topic(topic string) string {
@@ -180,6 +195,8 @@ func (m *mqttClient) Run(cmd *cobra.Command, args []string) error {
 	restartCommand		:= viper.GetString("wifi_restart_command")
 	m.extraSensors		 = viper.GetBool("extra_sensors")
 	m.vs.mode		 = vehicleSettingsMode()
+	m.extraCommands		 = viper.GetBool("extra_commands")
+	m.climateGuard		 = viper.GetBool("climate_guard")
 
 	if restartCommand == "" {
 		log.Infof("WiFi restart disabled")
@@ -331,6 +348,8 @@ func (m *mqttClient) handleIncomingMqtt(mqtt_client mqtt.Client, msg mqtt.Messag
 		m.handleAllowChangesCommand(msg)
 	} else if strings.HasPrefix(msg.Topic(), m.topic(vehicleSettingCommandPrefix)) {
 		m.handleVehicleSettingCommand(msg)
+	} else if m.isCommandButton(msg.Topic()) {
+		m.handleCommandButton(msg)
 	} else if msg.Topic() == m.topic("/connection") {
 		payload := strings.ToLower(string(msg.Payload()))
 		switch payload {
@@ -402,6 +421,10 @@ func (m *mqttClient) handleIncomingMqtt(mqtt_client mqtt.Client, msg mqtt.Messag
 			log.Errorf("Unknown climate duration: %s", payload)
 			return
 		}
+		if m.climateGuard {
+			go m.setClimateGuarded(mode, duration)
+			return
+		}
 
 		if m.phev.ModelYear == client.ModelYear14 {
 			// Set the AC mode first
@@ -465,6 +488,11 @@ func (m *mqttClient) handlePhev(cmd *cobra.Command) error {
 	m.status.Reset()
 	m.status.MY14 = m.phev.ModelYear == client.ModelYear14
 	go m.savePendingVehicleSettings()
+	m.regs.reset()
+	m.carModel = m.phev.ModelYear
+	if viper.GetBool("sync_clock") {
+		go m.syncClockOnConnect()
+	}
 
 	m.lastError = nil
 
@@ -528,6 +556,7 @@ var boolOpen = map[bool]string{
 }
 
 func (m *mqttClient) publishRegister(msg *protocol.PhevMessage) {
+	m.regs.put(msg.Register, msg.Data)
 	dataStr := hex.EncodeToString(msg.Data)
 	m.publish(fmt.Sprintf("/register/%02x", msg.Register), dataStr)
 	switch reg := msg.Reg.(type) {
