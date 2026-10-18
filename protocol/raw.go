@@ -135,8 +135,10 @@ func (s *SecurityKey) SKey(increment bool) byte {
 // ResyncSend points the send index at the key the car said it expected, in
 // a 0xbb (bad encoding) packet, so the next packet is sent with that key.
 // The key map is a permutation, so the key gives the index. It reports
-// whether the key was found. Idea from phev-remote-plus
-// (https://github.com/Anwo91/phev-remote-plus, core/protocol/SecurityKey.kt).
+// whether the key was found. Adapted from PHEV Link (phev-remote-plus,
+// https://github.com/Anwo91/phev-remote-plus, core/protocol/SecurityKey.kt),
+// Copyright (C) 2026 Anwo91 and contributors, GPL-3.0-or-later; see
+// README.md, Credits.
 func (s *SecurityKey) ResyncSend(expected byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

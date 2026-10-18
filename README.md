@@ -29,15 +29,34 @@ Also includes some debugging utilities, and a vehicle emulator.
 
 ## Licence, etc
 
-Licenced under the GPLv2.
+Licensed under the GNU General Public License, version 3 or (at your option) any later version, as the [LICENSE](LICENSE) file and the source file headers say. (This README used to say GPLv2.)
 
 Copyright 2021 Ben Buxton <bbuxton@gmail.com>
+
+Parts copyright 2026 Anwo91 and contributors; see Credits.
 
 Contributions and PRs are welcome.
 
 ### Credits
 
-Parts of this fork were ported from [PHEV Link](https://github.com/Anwo91/phev-remote-plus) (phev-remote-plus) by Anwo91, from its releases published under the GNU General Public License, version 3 or later (versions up to 1.0.91, October 2026): the register layouts behind the extra status sensors, the vehicle settings format and catalogue, the commands behind the extra buttons and the climate guard, and the key resync after the car's encoding complaints. PHEV Link has since become proprietary; nothing from its later versions is used.
+Parts of this fork are adapted from **PHEV Link** ([Anwo91/phev-remote-plus](https://github.com/Anwo91/phev-remote-plus)), Copyright (C) 2026 Anwo91 and contributors. They were translated from Kotlin to Go and changed to fit phev2mqtt in October 2026:
+
+| Taken from PHEV Link | Used for | Files here |
+|---|---|---|
+| Register layouts: `Registers.kt`, `RegisterDecoder.kt`, `ScheduleDecoder.kt`, `ChargeTimer.kt`; test values from `LogicTest.kt` and `ScheduleDecoderTest.kt` | The extra status sensors (`EXTRA_SENSORS`), and the Charger Connected and Interior Lights fixes | `protocol/status.go`, `protocol/message.go`, `protocol/status_test.go` |
+| The vehicle settings format and catalogue, with setting names and options as Mitsubishi's app shows them: `VehicleSettings.kt`; test values from `VehicleSettingsTest.kt` | Vehicle settings (`VEHICLE_SETTINGS`) | `protocol/vehicle_settings.go`, `protocol/vehicle_settings_catalog.go`, `protocol/vehicle_settings_test.go`, `cmd/mqtt_vehicle_settings.go` |
+| Command layouts: `CarCommand.kt` | The extra buttons (`EXTRA_COMMANDS`), the safer climate start (`CLIMATE_GUARD`) and the clock sync (`SYNC_CLOCK`) | `cmd/mqtt_commands.go` |
+| Key resync: `SecurityKey.kt`, `PhevSession.kt` | Recovery from encoding errors (`KEY_RESYNC`) | `protocol/raw.go`, `client/client.go` |
+
+Each of these files says which of its parts are adapted.
+
+**Licence of what was used.** All of it comes from PHEV Link's source code as published on GitHub on 14 October 2026, before version 1.0.92. Its LICENSE file then read:
+
+> This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+That licence allows adapting the code and distributing the result under the GPL version 3 or later, as this fork is, and the rights it grants are irrevocable as long as its conditions are met (GPLv3, section 2). The source used, with that LICENSE file, is archived.
+
+PHEV Link became proprietary on 15 October 2026. Its new LICENSE says: "Versions up to and including 1.0.91 were published under the GNU General Public License, version 3 or later. Copies of those versions that you received under that licence stay under it." Nothing from PHEV Link 1.0.92 or later is used.
 
 ## Getting started.
 

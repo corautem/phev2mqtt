@@ -5,7 +5,11 @@ import (
 	"testing"
 )
 
-// Vectors and expectations follow phev-remote-plus VehicleSettingsTest.kt.
+// Vectors and expectations follow PHEV Link (phev-remote-plus,
+// https://github.com/Anwo91/phev-remote-plus) VehicleSettingsTest.kt,
+// Copyright (C) 2026 Anwo91 and contributors, from its source as published on
+// 14 October 2026 under the GNU General Public License version 3 or later.
+// See README.md, Credits.
 
 func TestSettingCatalogueConsistent(t *testing.T) {
 	grouped := map[int]bool{}

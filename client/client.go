@@ -102,6 +102,10 @@ type Client struct {
 	// keyResync turns on recovery from the car's encoding complaints
 	// (0xbb): resync to the key the car expected, ignore repeated
 	// complaints, cap resends and ask for a new key when they pile up.
+	// The recovery is adapted from PHEV Link (phev-remote-plus,
+	// https://github.com/Anwo91/phev-remote-plus, PhevSession.kt and
+	// SecurityKey.kt), Copyright (C) 2026 Anwo91 and contributors,
+	// GPL-3.0-or-later; see README.md, Credits.
 	keyResync bool
 	// Encoding complaint bookkeeping, used by the reader goroutine only.
 	lastBadHint byte

@@ -1,3 +1,9 @@
+// Parts of this file are adapted from PHEV Link (phev-remote-plus,
+// https://github.com/Anwo91/phev-remote-plus), Copyright (C) 2026 Anwo91 and
+// contributors, from its source as published on 14 October 2026 under the
+// GNU General Public License version 3 or later. Translated to Go and changed
+// for phev2mqtt in October 2026. See README.md, Credits.
+
 package protocol
 
 import (
